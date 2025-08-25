@@ -92,13 +92,27 @@
       // Debug logs (visible in page console)
       console.log("[ExambaseRenamer] courseCode:", courseCode);
       console.log("[ExambaseRenamer] resources:", resources);
-  
+
       // Send to background
       chrome.runtime.sendMessage({
         type: "PAGE_INFO_EXAMBASE",
         courseCode,
         resources
       }, () => void 0);
+
+      // Listen for "download all" requests from the popup
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg?.type === 'DOWNLOAD_ALL_PDF_EXAMBASE') {
+          Object.entries(resources).forEach(([pdfUrl, info]) => {
+            chrome.runtime.sendMessage({
+              type: 'DOWNLOAD_PDF_EXAMBASE',
+              pdfUrl,
+              courseCode: info.courseCode,
+              examDate: info.examDate
+            });
+          });
+        }
+      });
     } catch (e) {
       console.error("[ExambaseRenamer] content script error:", e);
     }
