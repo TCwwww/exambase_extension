@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "test": "echo \"No tests specified\""
+  },
   "dependencies": {
     "pngjs": "^7.0.0"
   }

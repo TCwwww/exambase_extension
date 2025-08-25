@@ -17,24 +17,34 @@ setInterval(() => {
 // Receive parsed page info from content script
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   try {
-    if (msg?.type !== "PAGE_INFO_EXAMBASE") return;
+    if (msg?.type === "PAGE_INFO_EXAMBASE") {
+      const pageUrl = sender?.url || sender?.origin || "";
+      const now = Date.now();
 
-    const pageUrl = sender?.url || sender?.origin || "";
-    const now = Date.now();
-
-    if (msg.courseCode && pageUrl) {
-      courseCodeByUrl[pageUrl] = { courseCode: msg.courseCode, ts: now };
-    }
-
-    if (msg.resources && typeof msg.resources === "object") {
-      for (const [pdfUrl, info] of Object.entries(msg.resources)) {
-        if (!pdfUrl) continue;
-        resourcesByUrl[pdfUrl] = {
-          courseCode: info.courseCode || msg.courseCode || null,
-          examDate: info.examDate || null,
-          ts: now
-        };
+      if (msg.courseCode && pageUrl) {
+        courseCodeByUrl[pageUrl] = { courseCode: msg.courseCode, ts: now };
       }
+
+      if (msg.resources && typeof msg.resources === "object") {
+        for (const [pdfUrl, info] of Object.entries(msg.resources)) {
+          if (!pdfUrl) continue;
+          resourcesByUrl[pdfUrl] = {
+            courseCode: info.courseCode || msg.courseCode || null,
+            examDate: info.examDate || null,
+            ts: now
+          };
+        }
+      }
+    } else if (msg?.type === "DOWNLOAD_PDF_EXAMBASE" && msg.pdfUrl) {
+      const info = { courseCode: msg.courseCode, examDate: msg.examDate };
+      const filename = buildTargetFilename(info, msg.pdfUrl);
+      const now = Date.now();
+      resourcesByUrl[msg.pdfUrl] = { ...info, ts: now };
+      chrome.downloads.download({
+        url: msg.pdfUrl,
+        filename,
+        conflictAction: "uniquify"
+      });
     }
   } catch (e) {
     console.error("[ExambaseRenamer] onMessage error:", e);
@@ -52,6 +62,17 @@ function isISODate(s) {
 // Utility: sanitize filename (remove illegal characters)
 function sanitize(name) {
   return name.replace(/[\\/:*?"<>|]+/g, "").trim();
+}
+
+// Build target filename using existing rules
+function buildTargetFilename(info, url) {
+  if (!info?.courseCode) return undefined;
+  const code = sanitize(info.courseCode);
+  if (info.examDate && isISODate(info.examDate)) {
+    return `${code}_Exam_${info.examDate}.pdf`;
+  }
+  const original = url.split("/").pop().split("?")[0];
+  return `${code}_Exam_${sanitize(original)}`;
 }
 
 // Main: intercept and rename
