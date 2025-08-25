@@ -1,16 +1,16 @@
 // Simple in-memory caches (persisted via chrome.storage)
-const resourcesByUrl = Object.create(null);   // { pdfUrl: { courseCode, examDate, ts } }
-const courseCodeByUrl = Object.create(null);  // optional: pageUrl -> courseCode
+const resourcesByUrl = Object.create(null);   // { pdfUrl: { courseCode, examDate, pageUrl, ts } }
+const courseCodeByUrl = Object.create(null);  // optional: pageUrl -> { courseCode, ts }
 
 // Load persisted caches to survive service worker restarts
-{
+const initPromise = (async () => {
   const stored = await chrome.storage.local.get({
     resourcesByUrl: {},
     courseCodeByUrl: {}
   });
   Object.assign(resourcesByUrl, stored.resourcesByUrl);
   Object.assign(courseCodeByUrl, stored.courseCodeByUrl);
-}
+})();
 
 function persistCache() {
   chrome.storage.local.set({ resourcesByUrl, courseCodeByUrl });
@@ -32,8 +32,9 @@ setInterval(() => {
 
 // Receive parsed page info from content script
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  try {
-    if (msg?.type === "PAGE_INFO_EXAMBASE") {
+  initPromise.then(() => {
+    try {
+      if (msg?.type === "PAGE_INFO_EXAMBASE") {
       const pageUrl = sender?.url || sender?.origin || "";
       const now = Date.now();
 
@@ -47,6 +48,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           resourcesByUrl[pdfUrl] = {
             courseCode: info.courseCode || msg.courseCode || null,
             examDate: info.examDate || null,
+            pageUrl,
             ts: now
           };
         }
@@ -57,20 +59,40 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const info = { courseCode: msg.courseCode, examDate: msg.examDate };
       const filename = buildTargetFilename(info, msg.pdfUrl);
       const now = Date.now();
-      resourcesByUrl[msg.pdfUrl] = { ...info, ts: now };
+      resourcesByUrl[msg.pdfUrl] = {
+        ...resourcesByUrl[msg.pdfUrl],
+        ...info,
+        ts: now,
+        pageUrl: msg.pageUrl || resourcesByUrl[msg.pdfUrl]?.pageUrl || null
+      };
       chrome.downloads.download({
         url: msg.pdfUrl,
         filename,
         conflictAction: "uniquify"
       });
       persistCache();
+    } else if (msg?.type === "DOWNLOAD_ALL_PDF_EXAMBASE" && msg.pageUrl) {
+      const now = Date.now();
+      for (const [pdfUrl, info] of Object.entries(resourcesByUrl)) {
+        if (info.pageUrl !== msg.pageUrl) continue;
+        const filename = buildTargetFilename(info, pdfUrl);
+        resourcesByUrl[pdfUrl] = { ...info, ts: now };
+        chrome.downloads.download({
+          url: pdfUrl,
+          filename,
+          conflictAction: "uniquify"
+        });
+      }
+      persistCache();
     }
-  } catch (e) {
-    console.error("[ExambaseRenamer] onMessage error:", e);
-  } finally {
-    // Not really needed but avoids "Unchecked runtime.lastError" in some cases
-    if (sendResponse) sendResponse({ ok: true });
-  }
+    } catch (e) {
+      console.error("[ExambaseRenamer] onMessage error:", e);
+    } finally {
+      // Not really needed but avoids "Unchecked runtime.lastError" in some cases
+      if (sendResponse) sendResponse({ ok: true });
+    }
+  });
+  return true;
 });
 
 // Utility: ensure date looks like YYYY-MM-DD
@@ -95,28 +117,27 @@ function buildTargetFilename(info, url) {
 }
 
 // Main: intercept and rename
-chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+chrome.downloads.onDeterminingFilename.addListener(async (item, suggest) => {
+  await initPromise;
   try {
-    const url = new URL(item.url);
-    const host = url.hostname;
-
-    // Only handle Exambase host
-    if (host !== "exambase-lib-hku-hk.eproxy.lib.hku.hk") {
-      return; // let other downloads pass through
-    }
-
     // Try direct URL mapping first
     let info = resourcesByUrl[item.url];
 
     // Fallback: try referrer
     if (!info && item.referrer) {
       info = resourcesByUrl[item.referrer];
-    }
 
-    // LAST-RESORT: prefix match search if referrer is a full page URL and we stored per-link entries
-    if (!info && item.referrer) {
-      for (const [k, v] of Object.entries(resourcesByUrl)) {
-        if (item.referrer.startsWith(k)) { info = v; break; }
+      // LAST-RESORT: prefix match search if referrer is a full page URL and we stored per-link entries
+      if (!info) {
+        for (const [k, v] of Object.entries(resourcesByUrl)) {
+          if (item.referrer.startsWith(k)) { info = v; break; }
+        }
+      }
+
+      // If still nothing, try courseCodeByUrl using referrer page
+      if (!info) {
+        const ref = courseCodeByUrl[item.referrer];
+        if (ref?.courseCode) info = { courseCode: ref.courseCode, examDate: null };
       }
     }
 

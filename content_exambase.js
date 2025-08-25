@@ -84,7 +84,8 @@
             type: 'DOWNLOAD_PDF_EXAMBASE',
             pdfUrl,
             courseCode: info.courseCode,
-            examDate: info.examDate
+            examDate: info.examDate,
+            pageUrl: location.href
           }, () => void 0);
         });
       });
@@ -100,19 +101,7 @@
         resources
       }, () => void 0);
 
-      // Listen for "download all" requests from the popup
-      chrome.runtime.onMessage.addListener((msg) => {
-        if (msg?.type === 'DOWNLOAD_ALL_PDF_EXAMBASE') {
-          Object.entries(resources).forEach(([pdfUrl, info]) => {
-            chrome.runtime.sendMessage({
-              type: 'DOWNLOAD_PDF_EXAMBASE',
-              pdfUrl,
-              courseCode: info.courseCode,
-              examDate: info.examDate
-            });
-          });
-        }
-      });
+      // (Download-all handled in background)
     } catch (e) {
       console.error("[ExambaseRenamer] content script error:", e);
     }
