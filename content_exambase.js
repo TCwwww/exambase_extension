@@ -67,7 +67,22 @@
     try {
       const courseCode = extractCourseCode();
       const resources = parseRows(courseCode);
-  
+
+      // Attach click listener for direct downloads
+      byQSAll('a[href*="/archive/files/"][href$=".pdf"]').forEach(a => {
+        a.addEventListener('click', evt => {
+          evt.preventDefault();
+          const pdfUrl = new URL(a.getAttribute('href'), location.origin).href;
+          const info = resources[pdfUrl] || { courseCode, examDate: null };
+          chrome.runtime.sendMessage({
+            type: 'DOWNLOAD_PDF_EXAMBASE',
+            pdfUrl,
+            courseCode: info.courseCode,
+            examDate: info.examDate
+          }, () => void 0);
+        });
+      });
+
       // Debug logs (visible in page console)
       console.log("[ExambaseRenamer] courseCode:", courseCode);
       console.log("[ExambaseRenamer] resources:", resources);

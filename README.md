@@ -18,8 +18,8 @@ Examples:
   - course code (e.g., CIVL2112)
   - exam date (converted to `YYYY-MM-DD`)
   - each PDF link URL
-- It sends a map to the background service worker.
-- When you click a PDF, `background.js` intercepts the download and renames using the template.
+- It attaches a click handler to every PDF link and sends a map to the background service worker.
+- When a link is clicked the navigation is stopped; `background.js` downloads the PDF directly and names it using the template.
 
 ## Notes
 - Only runs on `https://exambase-lib-hku-hk.eproxy.lib.hku.hk/*`.
