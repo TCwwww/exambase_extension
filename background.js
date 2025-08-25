@@ -134,6 +134,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
       if (!info) {
         const ref = courseCodeByUrl[item.referrer];
         if (ref?.courseCode) info = { courseCode: ref.courseCode, examDate: null };
+
       }
     }
 
