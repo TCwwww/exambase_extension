@@ -41,19 +41,25 @@
         // pdf link
         const link = row.querySelector('a[href*="/archive/files/"][href$=".pdf"]');
         if (!link) return; // skip "Restricted" rows (no PDF)
-  
+
+        // ensure clicking forces a download instead of inline view
+        const url = new URL(link.getAttribute("href"), location.origin);
+        url.searchParams.set("download", "1");
+        link.setAttribute("href", url.href);
+        link.setAttribute("download", "");
+
         // locate metadata block <ul>
         const meta = row.querySelector("ul");
         if (!meta) return;
-  
+
         // find date like: "Exam date (d-m-yyyy): 9-12-2024"
         const text = meta.textContent || "";
         const m = text.match(/Exam date\s*\(d-m-yyyy\)\s*:\s*(\d{1,2})-(\d{1,2})-(\d{4})/i);
         if (!m) return;
-  
+
         const examDateISO = normalizeISO(m[1], m[2], m[3]);
-        const pdfUrl = new URL(link.getAttribute("href"), location.origin).href;
-  
+        const pdfUrl = url.href;
+
         resources[pdfUrl] = {
           courseCode,
           examDate: examDateISO
