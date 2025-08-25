@@ -1,0 +1,33 @@
+{
+    "manifest_version": 3,
+    "name": "HKU Exambase Download Renamer",
+    "description": "Renames Exambase past paper downloads to <COURSECODE>_Exam_<YYYY-MM-DD>.pdf",
+    "version": "0.1.0",
+    "icons": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "permissions": [
+      "downloads",
+      "storage"
+    ],
+    "host_permissions": [
+      "https://exambase-lib-hku-hk.eproxy.lib.hku.hk/*"
+    ],
+    "background": {
+      "service_worker": "background.js",
+      "type": "module"
+    },
+    "content_scripts": [
+      {
+        "matches": [
+          "https://exambase-lib-hku-hk.eproxy.lib.hku.hk/*"
+        ],
+        "js": ["content_exambase.js"],
+        "run_at": "document_idle"
+      }
+    ],
+    "minimum_chrome_version": "109"
+  }
+  
