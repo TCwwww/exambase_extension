@@ -1,6 +1,6 @@
 // Simple in-memory caches (persisted via chrome.storage)
-const resourcesByUrl = Object.create(null);   // { pdfUrl: { courseCode, examDate, ts } }
-const courseCodeByUrl = Object.create(null);  // optional: pageUrl -> courseCode
+const resourcesByUrl = Object.create(null);   // { pdfUrl: { courseCode, examDate, pageUrl, ts } }
+const courseCodeByUrl = Object.create(null);  // optional: pageUrl -> { courseCode, ts }
 
 // Load persisted caches to survive service worker restarts
 {
@@ -47,6 +47,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           resourcesByUrl[pdfUrl] = {
             courseCode: info.courseCode || msg.courseCode || null,
             examDate: info.examDate || null,
+            pageUrl,
             ts: now
           };
         }
@@ -57,12 +58,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const info = { courseCode: msg.courseCode, examDate: msg.examDate };
       const filename = buildTargetFilename(info, msg.pdfUrl);
       const now = Date.now();
-      resourcesByUrl[msg.pdfUrl] = { ...info, ts: now };
+      resourcesByUrl[msg.pdfUrl] = {
+        ...resourcesByUrl[msg.pdfUrl],
+        ...info,
+        ts: now,
+        pageUrl: msg.pageUrl || resourcesByUrl[msg.pdfUrl]?.pageUrl || null
+      };
       chrome.downloads.download({
         url: msg.pdfUrl,
         filename,
         conflictAction: "uniquify"
       });
+      persistCache();
+    } else if (msg?.type === "DOWNLOAD_ALL_PDF_EXAMBASE" && msg.pageUrl) {
+      const now = Date.now();
+      for (const [pdfUrl, info] of Object.entries(resourcesByUrl)) {
+        if (info.pageUrl !== msg.pageUrl) continue;
+        const filename = buildTargetFilename(info, pdfUrl);
+        resourcesByUrl[pdfUrl] = { ...info, ts: now };
+        chrome.downloads.download({
+          url: pdfUrl,
+          filename,
+          conflictAction: "uniquify"
+        });
+      }
       persistCache();
     }
   } catch (e) {
@@ -109,6 +128,13 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         for (const [k, v] of Object.entries(resourcesByUrl)) {
           if (item.referrer.startsWith(k)) { info = v; break; }
         }
+      }
+
+      // If still nothing, try courseCodeByUrl using referrer page
+      if (!info) {
+        const ref = courseCodeByUrl[item.referrer];
+        if (ref?.courseCode) info = { courseCode: ref.courseCode, examDate: null };
+
       }
     }
 
