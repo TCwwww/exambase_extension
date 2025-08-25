@@ -1,6 +1,20 @@
-// Simple in-memory caches (cleared periodically)
+// Simple in-memory caches (persisted via chrome.storage)
 const resourcesByUrl = Object.create(null);   // { pdfUrl: { courseCode, examDate, ts } }
-const courseCodeByUrl = Object.create(null);  // optional: pageUrl -> courseCode, if you want
+const courseCodeByUrl = Object.create(null);  // optional: pageUrl -> courseCode
+
+// Load persisted caches to survive service worker restarts
+{
+  const stored = await chrome.storage.local.get({
+    resourcesByUrl: {},
+    courseCodeByUrl: {}
+  });
+  Object.assign(resourcesByUrl, stored.resourcesByUrl);
+  Object.assign(courseCodeByUrl, stored.courseCodeByUrl);
+}
+
+function persistCache() {
+  chrome.storage.local.set({ resourcesByUrl, courseCodeByUrl });
+}
 
 // Housekeeping: expire entries after 30 min
 const EXPIRY_MS = 30 * 60 * 1000;
@@ -12,6 +26,8 @@ setInterval(() => {
   for (const [k, v] of Object.entries(courseCodeByUrl)) {
     if (now - v.ts > EXPIRY_MS) delete courseCodeByUrl[k];
   }
+  // Persist cleaned caches
+  persistCache();
 }, 5 * 60 * 1000);
 
 // Receive parsed page info from content script
@@ -35,6 +51,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           };
         }
       }
+
+      persistCache();
     } else if (msg?.type === "DOWNLOAD_PDF_EXAMBASE" && msg.pdfUrl) {
       const info = { courseCode: msg.courseCode, examDate: msg.examDate };
       const filename = buildTargetFilename(info, msg.pdfUrl);
@@ -45,6 +63,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         filename,
         conflictAction: "uniquify"
       });
+      persistCache();
     }
   } catch (e) {
     console.error("[ExambaseRenamer] onMessage error:", e);
