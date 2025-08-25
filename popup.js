@@ -2,9 +2,12 @@
 const btn = document.getElementById('download-all');
 btn.addEventListener('click', () => {
   chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-    const tabId = tabs[0]?.id;
-    if (tabId != null) {
-      chrome.tabs.sendMessage(tabId, { type: 'DOWNLOAD_ALL_PDF_EXAMBASE' });
+    const tab = tabs[0];
+    if (tab) {
+      chrome.runtime.sendMessage({
+        type: 'DOWNLOAD_ALL_PDF_EXAMBASE',
+        pageUrl: tab.url
+      });
     }
     window.close();
   });
