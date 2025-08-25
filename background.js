@@ -97,26 +97,18 @@ function buildTargetFilename(info, url) {
 // Main: intercept and rename
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   try {
-    const url = new URL(item.url);
-    const host = url.hostname;
-
-    // Only handle Exambase host
-    if (host !== "exambase-lib-hku-hk.eproxy.lib.hku.hk") {
-      return; // let other downloads pass through
-    }
-
     // Try direct URL mapping first
     let info = resourcesByUrl[item.url];
 
     // Fallback: try referrer
     if (!info && item.referrer) {
       info = resourcesByUrl[item.referrer];
-    }
 
-    // LAST-RESORT: prefix match search if referrer is a full page URL and we stored per-link entries
-    if (!info && item.referrer) {
-      for (const [k, v] of Object.entries(resourcesByUrl)) {
-        if (item.referrer.startsWith(k)) { info = v; break; }
+      // LAST-RESORT: prefix match search if referrer is a full page URL and we stored per-link entries
+      if (!info) {
+        for (const [k, v] of Object.entries(resourcesByUrl)) {
+          if (item.referrer.startsWith(k)) { info = v; break; }
+        }
       }
     }
 
