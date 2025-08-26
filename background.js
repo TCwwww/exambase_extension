@@ -93,14 +93,14 @@ function sanitize(name) {
   return name.replace(/[\\/:*?"<>|]+/g, "").trim();
 }
 
-// Build target filename using existing rules
+// Build target filename using flat format: <COURSECODE>_Exam_<YYYY-MM-DD>.pdf
 function buildTargetFilename(info, url) {
   if (!info?.courseCode) return undefined;
   const code = sanitize(info.courseCode);
   if (info.examDate && isISODate(info.examDate)) {
     return `${code}_Exam_${info.examDate}.pdf`;
   }
-  const original = url.split("/").pop().split("?")[0];
+  const original = (url || "").split("/").pop().split("?")[0];
   return `${code}_Exam_${sanitize(original)}`;
 }
 
@@ -132,18 +132,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
 
     // If we have details, build the target file name
     if (info?.courseCode) {
-      const code = sanitize(info.courseCode);
-      let target = null;
-
-      // Use desired format: <COURSECODE>_Exam_<YYYY-MM-DD>.pdf
-      if (info.examDate && isISODate(info.examDate)) {
-        target = `${code}_Exam_${info.examDate}.pdf`;
-      } else {
-        // fallback when date missing: prefix whatever was given
-        const original = item.filename.split("/").pop();
-        target = `${code}_Exam_${sanitize(original)}`;
-      }
-
+      const target = buildTargetFilename(info, item.url);
       console.log("[ExambaseRenamer] Renaming to:", target);
       suggest({ filename: target, conflictAction: "uniquify" });
       return;
@@ -152,14 +141,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     // If nothing found, try session storage once before keeping original
     return rehydrateFromSession(item.url, (rehydrated) => {
       if (rehydrated?.courseCode) {
-        const code = sanitize(rehydrated.courseCode);
-        let target = null;
-        if (rehydrated.examDate && isISODate(rehydrated.examDate)) {
-          target = `${code}_Exam_${rehydrated.examDate}.pdf`;
-        } else {
-          const original = item.filename.split("/").pop();
-          target = `${code}_Exam_${sanitize(original)}`;
-        }
+        const target = buildTargetFilename(rehydrated, item.url) || item.filename;
         console.log("[ExambaseRenamer] Renaming to (rehydrated):", target);
         suggest({ filename: target, conflictAction: "uniquify" });
       } else {
@@ -169,5 +151,35 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   } catch (e) {
     console.error("[ExambaseRenamer] rename error:", e);
     suggest({ filename: item.filename, conflictAction: "uniquify" });
+  }
+});
+
+// Batch download handler for popup
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'DOWNLOAD_ALL_EXAMBASE' && Array.isArray(msg.items)) {
+    (async () => {
+      const items = msg.items;
+      const total = items.length;
+      let done = 0;
+
+      for (const it of items) {
+        try {
+          const u = new URL(it.pdfUrl);
+          u.searchParams.set('download', '1');
+          const info = { courseCode: it.courseCode || null, examDate: it.examDate || null };
+          const filename = buildTargetFilename(info, u.href);
+          resourcesByUrl[u.href] = { ...info, ts: Date.now() };
+          await chrome.downloads.download({ url: u.href, filename, conflictAction: 'uniquify', saveAs: false });
+        } catch (_) {
+          // continue
+        } finally {
+          done += 1;
+          chrome.runtime.sendMessage({ type: 'DOWNLOAD_PROGRESS', done, total });
+        }
+      }
+      chrome.runtime.sendMessage({ type: 'DOWNLOAD_DONE', done: total });
+      if (sendResponse) sendResponse({ ok: true });
+    })();
+    return true;
   }
 });

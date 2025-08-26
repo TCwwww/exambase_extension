@@ -38,8 +38,8 @@
       const rows = byQSAll("td.evenResultDetail, td.oddResultDetail");
   
       rows.forEach(row => {
-        // pdf link
-        const link = row.querySelector('a[href*="/archive/files/"][href$=".pdf"]');
+        // pdf link (allow .pdf with query params)
+        const link = row.querySelector('a[href*="/archive/files/"][href*=".pdf"]');
         if (!link) return; // skip "Restricted" rows (no PDF)
 
         // ensure clicking forces a download instead of inline view
@@ -73,37 +73,61 @@
     try {
       const courseCode = extractCourseCode();
       const resources = parseRows(courseCode);
+
+      // Expose caches and helpers to window for popup requests
+      try {
+        window.__exambaseExtractCourseCode = extractCourseCode;
+        window.__exambaseParseRows = parseRows;
+        window.__exambaseCourseCodeCache = courseCode;
+        window.__exambaseResourcesCache = resources;
+      } catch (_) { /* no-op */ }
       
-      // Robust sender: retries once to wake background SW; falls back to navigation
+      // Robust sender: retries once; safely handles invalidated contexts; falls back to navigation
       function sendDownloadOrFallback(message, fallbackUrl) {
         return new Promise(resolve => {
-          chrome.runtime.sendMessage(message, () => {
-            if (chrome.runtime.lastError) {
-              // Give the service worker a moment to wake up, then retry once
-              setTimeout(() => {
-                chrome.runtime.sendMessage(message, () => {
-                  if (chrome.runtime.lastError) {
-                    // As a last resort, allow normal navigation to proceed
+          try {
+            if (!chrome?.runtime?.id) throw new Error('no-runtime');
+            chrome.runtime.sendMessage(message, () => {
+              if (chrome.runtime.lastError) {
+                setTimeout(() => {
+                  try {
+                    if (!chrome?.runtime?.id) throw new Error('no-runtime');
+                    chrome.runtime.sendMessage(message, () => {
+                      if (chrome.runtime.lastError) {
+                        if (fallbackUrl) location.href = fallbackUrl;
+                        resolve(false);
+                      } else {
+                        resolve(true);
+                      }
+                    });
+                  } catch (_) {
                     if (fallbackUrl) location.href = fallbackUrl;
                     resolve(false);
-                  } else {
-                    resolve(true);
                   }
-                });
-              }, 500);
-            } else {
-              resolve(true);
-            }
-          });
+                }, 500);
+              } else {
+                resolve(true);
+              }
+            });
+          } catch (_) {
+            if (fallbackUrl) location.href = fallbackUrl;
+            resolve(false);
+          }
         });
       }
 
       // Attach click listener for direct downloads
-      byQSAll('a[href*="/archive/files/"][href$=".pdf"]').forEach(a => {
+      byQSAll('a[href*="/archive/files/"][href*=".pdf"]').forEach(a => {
         a.addEventListener('click', evt => {
-          evt.preventDefault();
           const pdfUrl = new URL(a.getAttribute('href'), location.origin).href;
           const info = resources[pdfUrl] || { courseCode, examDate: null };
+
+          // If extension context is gone, let the browser handle it normally
+          if (!chrome?.runtime?.id) {
+            return; // do not preventDefault
+          }
+
+          evt.preventDefault();
           // Persist per-URL info so background can rename even after idle
           try {
             chrome.storage?.session?.set?.({ [pdfUrl]: info });
@@ -122,30 +146,59 @@
       console.log("[ExambaseRenamer] resources:", resources);
   
       // Send to background
-      chrome.runtime.sendMessage({
-        type: "PAGE_INFO_EXAMBASE",
-        courseCode,
-        resources
-      }, () => void 0);
+      try {
+        if (chrome?.runtime?.id) {
+          chrome.runtime.sendMessage({
+            type: "PAGE_INFO_EXAMBASE",
+            courseCode,
+            resources
+          }, () => void 0);
+        }
+      } catch (_) { /* no-op */ }
       
       // Warm up background SW on visibility (helps after long idle)
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-          // Republish current context and rehydrate session storage
-          try {
-            if (resources && typeof resources === 'object') {
-              chrome.storage?.session?.set?.(resources);
-            }
-          } catch (_) { /* no-op */ }
+        if (document.visibilityState !== 'visible') return;
+        if (!chrome?.runtime?.id) return;
+        // Republish current context and rehydrate session storage
+        try {
+          if (resources && typeof resources === 'object') {
+            chrome.storage?.session?.set?.(resources);
+          }
+        } catch (_) { /* no-op */ }
+        try {
           chrome.runtime.sendMessage({
             type: 'PAGE_INFO_EXAMBASE',
             courseCode,
             resources
           }, () => void 0);
-        }
+        } catch (_) { /* no-op */ }
       });
     } catch (e) {
       console.error("[ExambaseRenamer] content script error:", e);
     }
   })();
+
+// Respond to popup resource requests
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'REQUEST_EXAMBASE_RESOURCES') {
+    try {
+      const getExtract = () => (window.__exambaseExtractCourseCode || (() => null));
+      const getParse = () => (window.__exambaseParseRows || (() => ({})));
+      let courseCode = null;
+      try { courseCode = window.__exambaseCourseCodeCache || getExtract()(); } catch(_) { courseCode = getExtract()(); }
+      let resources = null;
+      try { resources = window.__exambaseResourcesCache || {}; } catch(_) { resources = {}; }
+      if (!resources || Object.keys(resources).length === 0) {
+        try { resources = getParse()(courseCode); } catch(_) { resources = {}; }
+      }
+      try { window.__exambaseCourseCodeCache = courseCode; } catch(_) {}
+      try { window.__exambaseResourcesCache = resources; } catch(_) {}
+      sendResponse({ ok: true, courseCode: courseCode || null, resources: resources || {} });
+    } catch (_) {
+      sendResponse({ ok: false, courseCode: null, resources: {} });
+    }
+    return true;
+  }
+});
   
