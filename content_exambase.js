@@ -73,6 +73,30 @@
     try {
       const courseCode = extractCourseCode();
       const resources = parseRows(courseCode);
+      
+      // Robust sender: retries once to wake background SW; falls back to navigation
+      function sendDownloadOrFallback(message, fallbackUrl) {
+        return new Promise(resolve => {
+          chrome.runtime.sendMessage(message, () => {
+            if (chrome.runtime.lastError) {
+              // Give the service worker a moment to wake up, then retry once
+              setTimeout(() => {
+                chrome.runtime.sendMessage(message, () => {
+                  if (chrome.runtime.lastError) {
+                    // As a last resort, allow normal navigation to proceed
+                    if (fallbackUrl) location.href = fallbackUrl;
+                    resolve(false);
+                  } else {
+                    resolve(true);
+                  }
+                });
+              }, 500);
+            } else {
+              resolve(true);
+            }
+          });
+        });
+      }
 
       // Attach click listener for direct downloads
       byQSAll('a[href*="/archive/files/"][href$=".pdf"]').forEach(a => {
@@ -80,12 +104,16 @@
           evt.preventDefault();
           const pdfUrl = new URL(a.getAttribute('href'), location.origin).href;
           const info = resources[pdfUrl] || { courseCode, examDate: null };
-          chrome.runtime.sendMessage({
+          // Persist per-URL info so background can rename even after idle
+          try {
+            chrome.storage?.session?.set?.({ [pdfUrl]: info });
+          } catch (_) { /* no-op */ }
+          sendDownloadOrFallback({
             type: 'DOWNLOAD_PDF_EXAMBASE',
             pdfUrl,
             courseCode: info.courseCode,
             examDate: info.examDate
-          }, () => void 0);
+          }, pdfUrl);
         });
       });
 
@@ -99,6 +127,23 @@
         courseCode,
         resources
       }, () => void 0);
+      
+      // Warm up background SW on visibility (helps after long idle)
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          // Republish current context and rehydrate session storage
+          try {
+            if (resources && typeof resources === 'object') {
+              chrome.storage?.session?.set?.(resources);
+            }
+          } catch (_) { /* no-op */ }
+          chrome.runtime.sendMessage({
+            type: 'PAGE_INFO_EXAMBASE',
+            courseCode,
+            resources
+          }, () => void 0);
+        }
+      });
     } catch (e) {
       console.error("[ExambaseRenamer] content script error:", e);
     }

@@ -14,6 +14,22 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+// Try to rehydrate a single pdfUrl from session storage
+function rehydrateFromSession(pdfUrl, callback) {
+  try {
+    if (!chrome.storage?.session?.get) return callback(null);
+    chrome.storage.session.get(pdfUrl, result => {
+      const info = result && result[pdfUrl] ? result[pdfUrl] : null;
+      if (info && info.courseCode) {
+        resourcesByUrl[pdfUrl] = { ...info, ts: Date.now() };
+      }
+      callback(info || null);
+    });
+  } catch (_) {
+    callback(null);
+  }
+}
+
 // Receive parsed page info from content script
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   try {
@@ -36,10 +52,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
       }
     } else if (msg?.type === "DOWNLOAD_PDF_EXAMBASE" && msg.pdfUrl) {
-      const info = { courseCode: msg.courseCode, examDate: msg.examDate };
-      const filename = buildTargetFilename(info, msg.pdfUrl);
       const now = Date.now();
+      let info = { courseCode: msg.courseCode, examDate: msg.examDate };
+      if (!info.courseCode) {
+        // Attempt rehydrate if SW lost state
+        return rehydrateFromSession(msg.pdfUrl, (rehydrated) => {
+          const finalInfo = rehydrated || info;
+          resourcesByUrl[msg.pdfUrl] = { ...finalInfo, ts: now };
+          const filename = buildTargetFilename(finalInfo, msg.pdfUrl);
+          chrome.downloads.download({
+            url: msg.pdfUrl,
+            filename,
+            conflictAction: "uniquify"
+          });
+        });
+      }
       resourcesByUrl[msg.pdfUrl] = { ...info, ts: now };
+      const filename = buildTargetFilename(info, msg.pdfUrl);
       chrome.downloads.download({
         url: msg.pdfUrl,
         filename,
@@ -120,8 +149,23 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
       return;
     }
 
-    // If nothing found, keep original
-    suggest({ filename: item.filename, conflictAction: "uniquify" });
+    // If nothing found, try session storage once before keeping original
+    return rehydrateFromSession(item.url, (rehydrated) => {
+      if (rehydrated?.courseCode) {
+        const code = sanitize(rehydrated.courseCode);
+        let target = null;
+        if (rehydrated.examDate && isISODate(rehydrated.examDate)) {
+          target = `${code}_Exam_${rehydrated.examDate}.pdf`;
+        } else {
+          const original = item.filename.split("/").pop();
+          target = `${code}_Exam_${sanitize(original)}`;
+        }
+        console.log("[ExambaseRenamer] Renaming to (rehydrated):", target);
+        suggest({ filename: target, conflictAction: "uniquify" });
+      } else {
+        suggest({ filename: item.filename, conflictAction: "uniquify" });
+      }
+    });
   } catch (e) {
     console.error("[ExambaseRenamer] rename error:", e);
     suggest({ filename: item.filename, conflictAction: "uniquify" });
